@@ -6,7 +6,7 @@ set (CMAKE_CXX_STANDARD 20)
 if(Boost_FOUND)
     include_directories(${Boost_INCLUDE_DIRS}) 
 endif()
-include_directories(/Users/abhilashraju/work/cpp/stdexec/include)
+include_directories(../thirdparty/stdexec/include)
 include_directories(../include)
 add_executable(chai_server
     main.cpp)
