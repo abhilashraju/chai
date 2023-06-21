@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
-#include <exception>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 namespace chai {
@@ -41,7 +42,6 @@ struct DynamicResizer {
   }
 };
 
-
 class mutable_buffer {
 public:
   /// Construct an empty buffer.
@@ -68,8 +68,6 @@ private:
   void *data_;
   std::size_t size_;
 };
-
-
 
 template <typename Resizer> struct buffer_base {
 private:
@@ -155,7 +153,7 @@ public:
       resize(capacity + overshoot);
     }
     write_len = n;
-    return mutable_buffer(write_buff,write_len);
+    return mutable_buffer(write_buff, write_len);
   }
   void commit(size_t used) {
     auto usedbuff = write_buff + used;
@@ -178,7 +176,6 @@ using buffer = buffer_base<NullResizer>;
 using string_buffer = buffer_base<StringResizer>;
 using vector_buffer = buffer_base<VectorResizer>;
 using dynamic_buffer = buffer_base<DynamicResizer>;
-
 
 class const_buffer {
 public:
@@ -308,9 +305,11 @@ inline const string_buffer *buffer_sequence_end(
 // template <typename BufferSequence>
 // struct buffer_sequence_cardinality
 //     : std::conditional<std::is_same<BufferSequence, mutable_buffer>::value ||
-//                            std::is_same<BufferSequence, const_buffer>::value ||
-//                            std::is_same<BufferSequence, vector_buffer>::value ||
-//                            std::is_same<BufferSequence, string_buffer>::value,
+//                            std::is_same<BufferSequence, const_buffer>::value
+//                            || std::is_same<BufferSequence,
+//                            vector_buffer>::value ||
+//                            std::is_same<BufferSequence,
+//                            string_buffer>::value,
 //                        one_buffer, multiple_buffers>::type {};
 // inline std::size_t buffer_copy_1(const mutable_buffer &target,
 //                                  const const_buffer &source) {
@@ -341,13 +340,15 @@ inline const string_buffer *buffer_sequence_end(
 
 // template <typename TargetIterator, typename SourceIterator>
 // std::size_t buffer_copy(
-//     one_buffer, multiple_buffers, TargetIterator target_begin, TargetIterator,
-//     SourceIterator source_begin, SourceIterator source_end,
-//     std::size_t max_bytes_to_copy = (std::numeric_limits<std::size_t>::max)()) {
+//     one_buffer, multiple_buffers, TargetIterator target_begin,
+//     TargetIterator, SourceIterator source_begin, SourceIterator source_end,
+//     std::size_t max_bytes_to_copy =
+//     (std::numeric_limits<std::size_t>::max)()) {
 //   std::size_t total_bytes_copied = 0;
 //   SourceIterator source_iter = source_begin;
 
-//   for (mutable_buffer target_buffer(buffer(*target_begin, max_bytes_to_copy));
+//   for (mutable_buffer target_buffer(buffer(*target_begin,
+//   max_bytes_to_copy));
 //        target_buffer.size() && source_iter != source_end; ++source_iter) {
 //     const_buffer source_buffer(*source_iter);
 //     std::size_t bytes_copied = (buffer_copy_1)(target_buffer, source_buffer);
@@ -362,7 +363,8 @@ inline const string_buffer *buffer_sequence_end(
 // std::size_t buffer_copy(
 //     multiple_buffers, one_buffer, TargetIterator target_begin,
 //     TargetIterator target_end, SourceIterator source_begin, SourceIterator,
-//     std::size_t max_bytes_to_copy = (std::numeric_limits<std::size_t>::max)()) {
+//     std::size_t max_bytes_to_copy =
+//     (std::numeric_limits<std::size_t>::max)()) {
 //   std::size_t total_bytes_copied = 0;
 //   TargetIterator target_iter = target_begin;
 
@@ -379,8 +381,8 @@ inline const string_buffer *buffer_sequence_end(
 
 // template <typename TargetIterator, typename SourceIterator>
 // std::size_t buffer_copy(multiple_buffers, multiple_buffers,
-//                         TargetIterator target_begin, TargetIterator target_end,
-//                         SourceIterator source_begin,
+//                         TargetIterator target_begin, TargetIterator
+//                         target_end, SourceIterator source_begin,
 //                         SourceIterator source_end) {
 //   std::size_t total_bytes_copied = 0;
 
@@ -418,9 +420,10 @@ inline const string_buffer *buffer_sequence_end(
 
 // template <typename TargetIterator, typename SourceIterator>
 // std::size_t buffer_copy(multiple_buffers, multiple_buffers,
-//                         TargetIterator target_begin, TargetIterator target_end,
-//                         SourceIterator source_begin, SourceIterator source_end,
-//                         std::size_t max_bytes_to_copy) {
+//                         TargetIterator target_begin, TargetIterator
+//                         target_end, SourceIterator source_begin,
+//                         SourceIterator source_end, std::size_t
+//                         max_bytes_to_copy) {
 //   std::size_t total_bytes_copied = 0;
 
 //   TargetIterator target_iter = target_begin;
@@ -429,7 +432,8 @@ inline const string_buffer *buffer_sequence_end(
 //   SourceIterator source_iter = source_begin;
 //   std::size_t source_buffer_offset = 0;
 
-//   while (total_bytes_copied != max_bytes_to_copy && target_iter != target_end &&
+//   while (total_bytes_copied != max_bytes_to_copy && target_iter != target_end
+//   &&
 //          source_iter != source_end) {
 //     mutable_buffer target_buffer =
 //         mutable_buffer(*target_iter) + target_buffer_offset;
@@ -466,7 +470,9 @@ inline const string_buffer *buffer_sequence_end(
 //   return detail::buffer_copy(
 //       detail::buffer_sequence_cardinality<MutableBufferSequence>(),
 //       detail::buffer_sequence_cardinality<ConstBufferSequence>(),
-//       bingo::buffer_sequence_begin(target), bingo::buffer_sequence_end(target),
-//       bingo::buffer_sequence_begin(source), bingo::buffer_sequence_end(source));
+//       bingo::buffer_sequence_begin(target),
+//       bingo::buffer_sequence_end(target),
+//       bingo::buffer_sequence_begin(source),
+//       bingo::buffer_sequence_end(source));
 // }
-} // namespace bingo
+} // namespace chai
