@@ -7,7 +7,7 @@ chai_client_includes = include_directories(['../include','../thirdparty/stdexec/
 
 
 executable(
-  'chai_client',
+  'chai_sslclient',
   'main.cpp',
   include_directories: chai_client_includes,
   dependencies:openssl_dep,
