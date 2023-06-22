@@ -52,14 +52,15 @@ template <typename stream> struct async_stream {
     return handler();
   }
 };
-template <typename Sock = sock_base>
-struct async_sock : async_stream<async_sock<Sock>> {
+
+template <typename Sock> struct async_sock : async_stream<async_sock<Sock>> {
   Sock sock;
   async_sock(Sock &&s) : sock(std::move(s)) {}
   int get_fd() { return sock.fd(); }
 
-  int on_read_handler(auto &buff) { return read(sock, buff); }
+  auto on_read_handler(auto &buff) { return read(sock, buff); }
 };
+
 struct async_io : async_stream<async_io> {
   int get_fd() { return fileno(stdin); }
   int on_read_handler(auto &buff) {

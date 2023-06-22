@@ -1,3 +1,4 @@
+#pragma once
 #include "chaisock.hpp"
 #include "sslerrors.hpp"
 #include <openssl/bio.h>
@@ -41,19 +42,29 @@ template <typename Derived> struct ssl_sock_base {
   }
   template <typename Buffer>
   friend int read(ssl_sock_base &stream, Buffer &buff) {
+    auto r = readssl(stream, buff);
+    if (r.second == SSlErrors::WantRead) {
+      return 1;
+    }
+    return r.first;
+  }
+
+  template <typename Buffer>
+  friend auto readssl(ssl_sock_base &stream, Buffer &buff) {
     constexpr int MAXSIZE = 1024;
     auto readsofar = 0;
+    SSlErrors r = SSlErrors::None;
     while (true) {
       size_t read = 0;
-      auto r = execute(SSL_read_ex(stream.self().ssl(), buff.prepare(MAXSIZE),
-                                   MAXSIZE, &read),
-                       stream.self().ssl());
+      r = execute(SSL_read_ex(stream.self().ssl(), buff.prepare(MAXSIZE),
+                              MAXSIZE, &read),
+                  stream.self().ssl());
       if (r != SSlErrors::None && r != SSlErrors::WantRead) {
         throw socket_exception(reason(r) + std::string(strerror(errno)));
       }
       if (read == 0 && r != SSlErrors::WantRead) {
         stream.self().base().set_eof(true);
-        break;
+        return std::make_pair(readsofar, r);
       }
       readsofar += read;
       buff.commit(read);
@@ -61,21 +72,22 @@ template <typename Derived> struct ssl_sock_base {
         break;
       }
     }
-    return readsofar;
+    return std::make_pair(readsofar, r);
   }
-  int readsome(char *buff, int size) {
-    int read = 0;
-    auto r = execute(SSL_read(self().ssl(), buff, size, read), self().ssl());
+  auto readsome(char *buff, int size) {
+    size_t read = 0;
+    auto r =
+        execute(SSL_read_ex(self().ssl(), buff, size, &read), self().ssl());
     if (r != SSlErrors::None && r != SSlErrors::WantRead) {
       throw socket_exception(reason(r));
     }
     if (read == 0 && r != SSlErrors::WantRead) {
       self().base().set_eof(true);
     }
-    return read;
+    return std::make_pair(read, r);
   }
   template <typename Buffer>
-  friend int send(const ssl_sock_base &stream, Buffer buff) {
+  friend auto send(const ssl_sock_base &stream, Buffer buff) {
     size_t written = 0;
     auto r = execute(SSL_write_ex(stream.self().ssl(), buff.data(),
                                   buff.read_length(), &written),
@@ -83,7 +95,7 @@ template <typename Derived> struct ssl_sock_base {
     if (r != SSlErrors::None && r != SSlErrors::WantWrite) {
       throw socket_exception(reason(r));
     }
-    return written;
+    return std::make_pair(written, r);
   }
 };
 struct ssl_client_sock : ssl_sock_base<ssl_client_sock> {
@@ -105,12 +117,7 @@ struct ssl_client_sock : ssl_sock_base<ssl_client_sock> {
     if (ssl())
       SSL_shutdown(ssl());
   }
-  SSlErrors startHandShake() {
-    if (int r = SSL_connect(ssl()); r != 1) {
-      return SSlErrors(SSL_get_error(ssl(), r));
-    }
-    return SSlErrors::None;
-  }
+  SSlErrors startHandShake() { return execute(SSL_connect(ssl()), ssl()); }
   SSL *ssl() const { return ssl_.get(); }
   sock_base &base() { return base_; }
   auto &fd() { return base().fd(); }

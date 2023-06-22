@@ -31,7 +31,11 @@ int main(int argc, char const *argv[]) {
   ssl_client_sock ssl_sock(std::move(clientsock));
   set_blocked(ssl_sock.base(), false);
   if (auto err = ssl_sock.startHandShake(); err != SSlErrors::None) {
-    std::cout << "HandShake error " << reason(err) << "\n";
+    // std::cout << "HandShake error " << reason(err) << "\n";
+    // if (err == SSlErrors::WantRead) {
+    //   char buff[256];
+    //   ssl_sock.readsome(buff, sizeof(buff));
+    // }
   }
   async_sock<ssl_client_sock> sslstream(std::move(ssl_sock));
   thread_data remotedata;
@@ -42,8 +46,9 @@ int main(int argc, char const *argv[]) {
     io_data.request_stop();
     context.request_stop();
   };
-  auto workTask = stdexec::schedule(net_thread.get_scheduler()) |
-                  wait_for_io(sslstream, remotedata.get_buffer()) |
+
+  auto start = stdexec::schedule(net_thread.get_scheduler());
+  auto workTask = wait_for_io(sslstream, remotedata.get_buffer()) |
                   stdexec::then([&](auto) {
                     std::cout << remotedata.get_buffer().data();
                     remotedata.get_buffer().consume_all();
@@ -51,7 +56,7 @@ int main(int argc, char const *argv[]) {
                   stdexec::then([token = remotedata.get_token()]() {
                     return token.stop_requested();
                   });
-  auto work = exec::repeat_effect_until(std::move(workTask)) |
+  auto work = exec::repeat_effect_until(std::move(start | workTask)) |
               handle_error([&](auto &e) {
                 std::cout << "Server Error \n";
                 clean_up();

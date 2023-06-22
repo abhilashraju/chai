@@ -25,6 +25,23 @@ struct broadcast_ssl_handler : broadcast_handler<Handler, ssl_server_sock> {
     }
     BASE_TYPE::getClientList().add_client(clientsock.release());
   }
+
+  auto handle_read(int fd) const {
+    auto sock = BASE_TYPE::getClientList().find(fd);
+    if (sock) {
+      std::string str;
+      string_buffer buf(str);
+      auto n = readssl(*sock.value(), buf);
+      if (n.second == SSlErrors::None && n.first == 0) {
+        BASE_TYPE::getClientList().remove_client(sock.value());
+        return false; // socket closed by remote
+      }
+      if (n.first > 0) {
+        BASE_TYPE::getClientList().broadcast(BASE_TYPE::request_handler(buf));
+      }
+    }
+    return true;
+  }
   broadcast_ssl_handler(SSL_CTX *c, Handler &&handler)
       : BASE_TYPE(std::forward<Handler>(handler)), sslCtx(c) {}
   broadcast_ssl_handler(const broadcast_ssl_handler &) = delete;
