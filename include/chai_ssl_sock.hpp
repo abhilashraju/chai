@@ -369,7 +369,7 @@ struct peer_to_peer_ssl_handler
     auto start_hand_shake() const
     {
         return stdexec::then([](auto sock) {
-            set_blocked(sock->base(), false);
+            // sset_blocked(sock->base(), false);
             if (auto err = sock->startHandShake(); err != SSlErrors::None)
             {
                 if (err != SSlErrors::WantRead && err != SSlErrors::WantWrite &&
