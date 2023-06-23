@@ -1,5 +1,6 @@
 #pragma once
-#include "chaisock.hpp"
+#include "async_stream.hpp"
+#include "chai.hpp"
 #include "sslerrors.hpp"
 #include <openssl/bio.h>
 #include <openssl/err.h>
@@ -35,6 +36,9 @@ inline SSlErrors execute(int result, SSL *ssl) {
 }
 
 template <typename Derived> struct ssl_sock_base {
+  bool handshakeDone{false};
+  bool isHandshakeDone() const { return handshakeDone; }
+  void setHandshakeDone(bool v) { handshakeDone = v; }
   Derived &self() { return static_cast<Derived &>(*this); }
   const Derived &self() const { return static_cast<const Derived &>(*this); }
   template <typename Buffer> int read_all(Buffer &buffer) {
@@ -62,7 +66,7 @@ template <typename Derived> struct ssl_sock_base {
       if (r != SSlErrors::None && r != SSlErrors::WantRead) {
         throw socket_exception(reason(r) + std::string(strerror(errno)));
       }
-      if (read == 0 && r != SSlErrors::WantRead) {
+      if (read == 0 && stream.isHandshakeDone()) {
         stream.self().base().set_eof(true);
         return std::make_pair(readsofar, r);
       }
@@ -81,7 +85,7 @@ template <typename Derived> struct ssl_sock_base {
     if (r != SSlErrors::None && r != SSlErrors::WantRead) {
       throw socket_exception(reason(r));
     }
-    if (read == 0 && r != SSlErrors::WantRead) {
+    if (read == 0 && isHandshakeDone()) {
       self().base().set_eof(true);
     }
     return std::make_pair(read, r);
@@ -141,6 +145,7 @@ struct ssl_server_sock : ssl_sock_base<ssl_server_sock> {
     }
     return SSlErrors::None;
   }
+
   SSL *ssl() const { return ssl_.get(); }
   sock_base &base() { return base_; }
   auto &fd() { return base().fd(); }
@@ -166,5 +171,86 @@ private:
     return ctx;
   }
 };
+template <typename SSL_SOCK>
+inline bool handleHandshake(SSL_SOCK &sock, SSlErrors result) {
+  if (!sock.isHandshakeDone()) {
+    if (result == SSlErrors::ErrorSsl || result == SSlErrors::ErrorSysCall) {
+      throw std::runtime_error(reason(result));
+    }
+    if (result != SSlErrors::None) {
+      return false;
+    }
+    sock.setHandshakeDone(true);
+    return false;
+  }
+  return true;
+}
+template <typename Handler>
+struct broadcast_ssl_handler : broadcast_handler<Handler, ssl_server_sock> {
+  using BASE_TYPE = broadcast_handler<Handler, ssl_server_sock>;
+  SSL_CTX *sslCtx{nullptr};
+  auto spawn(auto &scope, auto &context, auto newsock) const {
+    std::unique_ptr<ssl_server_sock> clientsock(
+        new ssl_server_sock(std::move(newsock), sslCtx));
+    set_blocked(clientsock->base(), false);
+    if (auto err = clientsock->startHandShake(); err != SSlErrors::None) {
+      if (err != SSlErrors::WantRead && err != SSlErrors::WantWrite &&
+          err != SSlErrors::WantConnect && err != SSlErrors::WantAccept) {
+        return;
+      }
+    }
+    BASE_TYPE::getClientList().add_client(clientsock.release());
+  }
 
+  auto handle_read(int fd) const {
+    auto sock = BASE_TYPE::getClientList().find(fd);
+    try {
+
+      if (sock) {
+        std::string str;
+        string_buffer buf(str);
+        auto n = readssl(*sock.value(), buf);
+        if (handleHandshake(*sock.value(), n.second)) {
+          if (n.first == 0) {
+            BASE_TYPE::getClientList().remove_client(sock.value());
+            return false; // socket closed by remote
+          }
+          if (n.first > 0) {
+            BASE_TYPE::getClientList().broadcast(
+                BASE_TYPE::request_handler(buf));
+          }
+        }
+      }
+      return true;
+    } catch (std::exception &e) {
+      BASE_TYPE::getClientList().remove_client(sock.value());
+    }
+    return false;
+  }
+  broadcast_ssl_handler(SSL_CTX *c, Handler &&handler)
+      : BASE_TYPE(std::forward<Handler>(handler)), sslCtx(c) {}
+  broadcast_ssl_handler(const broadcast_ssl_handler &) = delete;
+  broadcast_ssl_handler(broadcast_ssl_handler &&other)
+      : BASE_TYPE(std::move(other)) {
+    sslCtx = std::move(other.sslCtx);
+  }
+  broadcast_ssl_handler &operator=(const broadcast_ssl_handler &) = delete;
+  broadcast_ssl_handler &operator=(broadcast_ssl_handler &&) = delete;
+};
+
+struct async_ssl_sock : async_stream<async_ssl_sock> {
+  ssl_client_sock sock;
+  async_ssl_sock(ssl_client_sock &&s) : sock(std::move(s)) {}
+  int get_fd() { return sock.fd(); }
+
+  auto on_read_handler(auto &buff) {
+
+    auto n = readssl(sock, buff);
+    if (handleHandshake(sock, n.second)) {
+      return n.first;
+    }
+    // still handshake going on
+    return 1;
+  }
+};
 } // namespace chai

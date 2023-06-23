@@ -37,7 +37,7 @@ int main(int argc, char const *argv[]) {
     //   ssl_sock.readsome(buff, sizeof(buff));
     // }
   }
-  async_sock<ssl_client_sock> sslstream(std::move(ssl_sock));
+  async_ssl_sock sslstream(std::move(ssl_sock));
   thread_data remotedata;
   async_io io;
   thread_data io_data;

@@ -20,7 +20,7 @@ int main(int argc, char const *argv[]) {
   exec::single_thread_context io_thread;
   exec::single_thread_context net_thread;
 
-  async_sock<sock_base> client(sock_base{});
+  async_sock client(sock_base{});
   std::string ip = "127.0.0.1";
   if (argc > 1) {
     ip = argv[1];
