@@ -13,7 +13,7 @@ int main(int argc, const char* argv[])
 {
     (void)argc;
     (void)argv;
-    bool broad_cast = true;
+    bool broad_cast = false;
     const char* servcert =
         "/home/abhilash/work/chai/certs/server-certificate.pem";
     const char* servkey =
@@ -43,8 +43,9 @@ int main(int argc, const char* argv[])
         {
             stdexec::sync_wait(
                 make_listener("127.0.0.1", PORT) |
-                process_clients(context, peer_to_peer_handler(
-                                             [](auto buff) { return buff; })));
+                process_clients(context,
+                                peer_to_peer_ssl_handler(
+                                    sslctx, [](auto buff) { return buff; })));
         }
     }
     catch (std::exception& e)

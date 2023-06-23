@@ -343,6 +343,82 @@ struct broadcast_ssl_handler : broadcast_handler<Handler, ssl_server_sock>
     broadcast_ssl_handler& operator=(const broadcast_ssl_handler&) = delete;
     broadcast_ssl_handler& operator=(broadcast_ssl_handler&&) = delete;
 };
+template <typename Handler>
+struct peer_to_peer_ssl_handler
+{
+    using Request_Handler = Handler;
+    Request_Handler request_handler;
+    static constexpr bool broad_casting = false;
+    SSL_CTX* sslCtx{nullptr};
+    peer_to_peer_ssl_handler(SSL_CTX* ctx, Request_Handler handler) :
+        request_handler(std::move(handler)), sslCtx(ctx)
+    {}
+    auto spawn(auto& scope, auto& context, auto newconnection) const
+    {
+        scope.spawn(stdexec::on(context.get_scheduler(),
+                                handleConnection(std::move(newconnection))));
+    }
+    auto handle_read(int fd) const
+    {
+        return false;
+    }
+    auto make_ssl_socket(sock_base&& newsock, auto sslCtx) const
+    {
+        return stdexec::just(new ssl_server_sock(std::move(newsock), sslCtx));
+    }
+    auto start_hand_shake() const
+    {
+        return stdexec::then([](auto sock) {
+            set_blocked(sock->base(), false);
+            if (auto err = sock->startHandShake(); err != SSlErrors::None)
+            {
+                if (err != SSlErrors::WantRead && err != SSlErrors::WantWrite &&
+                    err != SSlErrors::WantConnect &&
+                    err != SSlErrors::WantAccept)
+                {
+                    throw socket_exception(std::string("Hand Shake Error"));
+                }
+            }
+            return sock;
+        });
+    }
+    auto process_read() const
+    {
+        return stdexec::then([=](auto newsock) {
+            std::unique_ptr<ssl_server_sock> sock(newsock);
+            try
+            {
+                while (true)
+                {
+                    std::string str;
+                    string_buffer buf(str);
+                    auto n = readssl(*sock, buf);
+                    if (handleHandshake(*sock, n.second))
+                    {
+                        if (n.first == 0)
+                        {
+                            throw socket_exception(std::string("EOF"));
+                        }
+                        if (n.first > 0)
+                        {
+                            send(*sock, request_handler(buf));
+                        }
+                    }
+                }
+            }
+            catch (std::exception& e)
+            {
+                printf("%s", e.what());
+            }
+        });
+    }
+    auto handleConnection(sock_base newsock) const
+    {
+        auto session = make_ssl_socket(std::move(newsock), sslCtx) |
+                       start_hand_shake() | process_read();
+        return session;
+    }
+};
 
 struct async_ssl_sock : async_stream<async_ssl_sock>
 {
