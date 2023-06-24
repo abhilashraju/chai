@@ -367,7 +367,8 @@ struct peer_to_peer_ssl_handler
     }
     auto make_ssl_socket(sock_base&& newsock, auto sslCtx) const
     {
-        return stdexec::just(new ssl_server_sock(std::move(newsock), sslCtx));
+        return stdexec::just(
+            std::make_unique<ssl_server_sock>(std::move(newsock), sslCtx));
     }
     auto start_hand_shake() const
     {
@@ -382,13 +383,14 @@ struct peer_to_peer_ssl_handler
                     throw socket_exception(std::string("Hand Shake Error"));
                 }
             }
+            sock->setHandshakeDone(true);
             return sock;
         });
     }
     auto process_read() const
     {
-        return stdexec::then([=](auto newsock) {
-            std::unique_ptr<ssl_server_sock> sock(newsock);
+        return stdexec::then([=](auto sock) {
+            // std::unique_ptr<ssl_server_sock> sock(newsock);
             try
             {
                 while (true)
