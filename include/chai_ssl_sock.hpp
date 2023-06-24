@@ -171,6 +171,9 @@ struct ssl_client_sock : ssl_sock_base<ssl_client_sock>
         // }
         ssl_.reset(SSL_new(ctx_.get()));
         SSL_set_fd(ssl(), base_.fd());
+        set_blocked(base(), false);
+        if (auto err = startHandShake(); err != SSlErrors::None)
+        {}
     }
     ssl_client_sock(const ssl_client_sock&) = delete;
     ssl_client_sock(ssl_client_sock&&) = default;
