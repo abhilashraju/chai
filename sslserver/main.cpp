@@ -15,12 +15,6 @@ int main(int argc, const char* argv[])
     (void)argc;
     (void)argv;
 
-    // const char* servcert =
-    //     "/home/abhilash/work/chai/certs/server-certificate.pem";
-    // const char* servkey =
-    //     "/home/abhilash/work/chai/certs/server-private-key.pem";
-    // const char* certLocation = "/etc/ssl/certs";
-
     auto [peertopeer, servcert, servkey, certLocation] =
         getArgs(parseCommandline(argc, argv), "-m", "-c", "-p", "-t");
     if (servcert.empty() || servkey.empty() || certLocation.empty())

@@ -172,18 +172,25 @@ struct ssl_sock_base
     {
         auto ctx = SSL_CTX_new(server ? SSLv23_server_method()
                                       : SSLv23_client_method());
-        SSL_CTX_use_certificate_file(ctx, cert.data(), SSL_FILETYPE_PEM);
-        SSL_CTX_use_PrivateKey_file(ctx, privk.data(), SSL_FILETYPE_PEM);
-        SSL_CTX_set_verify(ctx,
-                           SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
-                           [](int preverify_ok, X509_STORE_CTX* ctx) {
-            // You can implement custom verification logic here
-            // For simplicity, we'll return preverify_ok for now
-            return preverify_ok;
-        });
+        if (!SSL_CTX_use_certificate_file(ctx, cert.data(), SSL_FILETYPE_PEM))
+        {
+            throw std::runtime_error("Invallid certificate file");
+        }
+        if (!SSL_CTX_use_PrivateKey_file(ctx, privk.data(), SSL_FILETYPE_PEM))
+        {
+            throw std::runtime_error("Invallid Private key file");
+        }
+        // SSL_CTX_set_verify(ctx,
+        //                    SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+        //                    [](int preverify_ok, X509_STORE_CTX* ctx) {
+        //     // You can implement custom verification logic here
+        //     // For simplicity, we'll return preverify_ok for now
+        //     return preverify_ok;
+        // });
         if (!SSL_CTX_load_verify_locations(ctx, nullptr, truststr.data()))
         {
-            throw std::runtime_error("Invallid certification file or location");
+            throw std::runtime_error(
+                "Invallid certification trust store file or location");
         }
         return ctx;
     }
@@ -308,7 +315,6 @@ inline bool handleHandshake(SSL_SOCK& sock, SSlErrors result)
             return false;
         }
         sock.setHandshakeDone(true);
-        return false;
     }
     return true;
 }
@@ -329,7 +335,7 @@ struct broadcast_ssl_handler : broadcast_handler<Handler, ssl_server_sock>
             {
                 return;
             }
-            throw socket_exception(std::string("Hand Shake Error"));
+            // throw socket_exception(std::string("Hand Shake Error"));
         }
         BASE_TYPE::getClientList().add_client(clientsock.release());
     }
