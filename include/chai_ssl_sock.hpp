@@ -156,19 +156,61 @@ struct ssl_sock_base
         }
         return std::make_pair(written, r);
     }
+
+  protected:
+    static SSL_CTX* getSslVarifyContext(bool server, const std::string& cert,
+                                        const std::string& privk,
+                                        const std::string& truststr)
+    {
+        static UniquePtr<SSL_CTX> ctx(
+            makeContext(server, cert, privk, truststr));
+        return ctx.get();
+    }
+    static SSL_CTX* makeContext(bool server, const std::string& cert,
+                                const std::string& privk,
+                                const std::string& truststr)
+    {
+        auto ctx = SSL_CTX_new(server ? SSLv23_server_method()
+                                      : SSLv23_client_method());
+        SSL_CTX_use_certificate_file(ctx, cert.data(), SSL_FILETYPE_PEM);
+        SSL_CTX_use_PrivateKey_file(ctx, privk.data(), SSL_FILETYPE_PEM);
+        SSL_CTX_set_verify(ctx,
+                           SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+                           [](int preverify_ok, X509_STORE_CTX* ctx) {
+            // You can implement custom verification logic here
+            // For simplicity, we'll return preverify_ok for now
+            return preverify_ok;
+        });
+        if (!SSL_CTX_load_verify_locations(ctx, nullptr, truststr.data()))
+        {
+            throw std::runtime_error("Invallid certification file or location");
+        }
+        return ctx;
+    }
 };
 struct ssl_client_sock : ssl_sock_base<ssl_client_sock>
 {
+    using BASECLASS = ssl_sock_base<ssl_client_sock>;
     sock_base base_;
     UniquePtr<SSL_CTX> ctx_;
     UniquePtr<SSL> ssl_;
-    ssl_client_sock(sock_base b) : base_(std::move(b))
+    ssl_client_sock(sock_base b, const char* ssltruststore = "/etc/ssl/certs") :
+        base_(std::move(b))
     {
         ctx_.reset(SSL_CTX_new(SSLv23_client_method()));
-        // if(!SSL_CTX_load_verify_locations(ctx.get(),"path/to/truststore.pem",nullptr))
-        // {
-        //     // Handle error loading trust store
-        // }
+        if (!SSL_CTX_load_verify_locations(ctx_.get(), nullptr, ssltruststore))
+        {
+            throw std::runtime_error("Error in setring trust store dir");
+        }
+        ssl_.reset(SSL_new(ctx_.get()));
+        SSL_set_fd(ssl(), base_.fd());
+        set_blocked(base(), false);
+        if (auto err = startHandShake(); err != SSlErrors::None)
+        {}
+    }
+    ssl_client_sock(sock_base b, SSL_CTX* ctx) : base_(std::move(b))
+    {
+        ctx_.reset(ctx);
         ssl_.reset(SSL_new(ctx_.get()));
         SSL_set_fd(ssl(), base_.fd());
         set_blocked(base(), false);
@@ -198,9 +240,16 @@ struct ssl_client_sock : ssl_sock_base<ssl_client_sock>
     {
         return base().fd();
     }
+    static SSL_CTX* getSslVarifyContext(const std::string& cert,
+                                        const std::string& privk,
+                                        const std::string& truststr)
+    {
+        BASECLASS::getSslVarifyContext(false, cert, privk, truststr);
+    }
 };
 struct ssl_server_sock : ssl_sock_base<ssl_server_sock>
 {
+    using BASECLASS = ssl_sock_base<ssl_server_sock>;
     sock_base base_;
     SSL_CTX* ctx_;
     UniquePtr<SSL> ssl_;
@@ -238,29 +287,11 @@ struct ssl_server_sock : ssl_sock_base<ssl_server_sock>
     {
         return base().fd();
     }
-
-  public:
-    static SSL_CTX* getServerContext(const std::string& cert,
-                                     const std::string& privk,
-                                     const std::string& truststr)
+    static SSL_CTX* getSslVarifyContext(const std::string& cert,
+                                        const std::string& privk,
+                                        const std::string& truststr)
     {
-        static UniquePtr<SSL_CTX> ctx(makeContext(cert, privk, truststr));
-        return ctx.get();
-    }
-
-  private:
-    static SSL_CTX* makeContext(const std::string& cert,
-                                const std::string& privk,
-                                const std::string& truststr)
-    {
-        auto ctx = SSL_CTX_new(SSLv23_server_method());
-        SSL_CTX_use_certificate_file(ctx, cert.data(), SSL_FILETYPE_PEM);
-        SSL_CTX_use_PrivateKey_file(ctx, privk.data(), SSL_FILETYPE_PEM);
-        // if (!SSL_CTX_load_verify_locations(ctx, truststr.data(),
-        // nullptr)) {
-        //     // Handle error loading trust store
-        // }
-        return ctx;
+        BASECLASS::getSslVarifyContext(true, cert, privk, truststr);
     }
 };
 template <typename SSL_SOCK>
@@ -298,6 +329,7 @@ struct broadcast_ssl_handler : broadcast_handler<Handler, ssl_server_sock>
             {
                 return;
             }
+            throw socket_exception(std::string("Hand Shake Error"));
         }
         BASE_TYPE::getClientList().add_client(clientsock.release());
     }
@@ -391,36 +423,32 @@ struct peer_to_peer_ssl_handler
     {
         return stdexec::then([=](auto sock) {
             // std::unique_ptr<ssl_server_sock> sock(newsock);
-            try
+
+            while (true)
             {
-                while (true)
+                std::string str;
+                string_buffer buf(str);
+                auto n = readssl(*sock, buf);
+                if (handleHandshake(*sock, n.second))
                 {
-                    std::string str;
-                    string_buffer buf(str);
-                    auto n = readssl(*sock, buf);
-                    if (handleHandshake(*sock, n.second))
+                    if (n.first == 0)
                     {
-                        if (n.first == 0)
-                        {
-                            throw socket_exception(std::string("EOF"));
-                        }
-                        if (n.first > 0)
-                        {
-                            send(*sock, request_handler(buf));
-                        }
+                        throw socket_exception(std::string("EOF"));
+                    }
+                    if (n.first > 0)
+                    {
+                        send(*sock, request_handler(buf));
                     }
                 }
-            }
-            catch (std::exception& e)
-            {
-                printf("%s", e.what());
             }
         });
     }
     auto handleConnection(sock_base newsock) const
     {
-        auto session = make_ssl_socket(std::move(newsock), sslCtx) |
-                       start_hand_shake() | process_read();
+        auto session =
+            make_ssl_socket(std::move(newsock), sslCtx) | start_hand_shake() |
+            process_read() |
+            handle_error([&](std::exception& v) { printf("%s", v.what()); });
         return session;
     }
 };

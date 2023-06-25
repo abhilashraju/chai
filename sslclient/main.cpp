@@ -4,6 +4,7 @@
 #include "chai_ssl_sock.hpp"
 #include "io_context.hpp"
 #include "stream_processor.hpp"
+#include "utils/command_line_parser.hpp"
 
 #include <exec/repeat_effect_until.hpp>
 #include <exec/single_thread_context.hpp>
@@ -11,9 +12,9 @@
 #include <stdexec/execution.hpp>
 
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <thread>
-
 int PORT = 8089;
 
 int main(int argc, const char* argv[])
@@ -25,15 +26,24 @@ int main(int argc, const char* argv[])
     exec::single_thread_context net_thread;
 
     sock_base clientsock;
-    std::string ip = "127.0.0.1";
-    if (argc > 1)
-    {
-        ip = argv[1];
-    }
+    std::string address = "127.0.0.1";
 
-    connect(clientsock, {ip, PORT});
-    // ssl_client_sock ssl_sock(std::move(clientsock));
-    async_ssl_sock sslstream(ssl_client_sock(std::move(clientsock)));
+    auto [ip, certPath, priKey, trustStore] =
+        getArgs(parseCommandline(argc, argv), "-ip", "-c", "-p", "-t");
+    if (!ip.empty())
+    {
+        address = ip.data();
+    }
+    connect(clientsock, {address, PORT});
+
+    auto sslClientSock =
+        (certPath.empty())
+            ? ssl_client_sock(std::move(clientsock))
+            : ssl_client_sock(
+                  std::move(clientsock),
+                  ssl_client_sock::getSslVarifyContext(
+                      certPath.data(), priKey.data(), trustStore.data()));
+    async_ssl_sock sslstream(std::move(sslClientSock));
     thread_data remotedata;
     async_io io;
     thread_data io_data;
