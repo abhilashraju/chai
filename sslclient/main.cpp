@@ -38,7 +38,7 @@ int main(int argc, const char* argv[])
 
     auto sslClientSock =
         (certPath.empty())
-            ? ssl_client_sock(std::move(clientsock))
+            ? ssl_client_sock(std::move(clientsock), true)
             : ssl_client_sock(
                   std::move(clientsock),
                   ssl_client_sock::getSslVarifyContext(

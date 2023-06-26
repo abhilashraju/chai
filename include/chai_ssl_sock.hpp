@@ -2,12 +2,15 @@
 #include "async_stream.hpp"
 #include "chai.hpp"
 #include "sslerrors.hpp"
+#include "sslverifycallback.hpp"
 
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 namespace chai
 {
+int mydata_index = 0;
+mydata_t mycontextdata;
 template <class T>
 struct DeleterOf;
 template <>
@@ -160,15 +163,17 @@ struct ssl_sock_base
   protected:
     static SSL_CTX* getSslVarifyContext(bool server, const std::string& cert,
                                         const std::string& privk,
-                                        const std::string& truststr)
+                                        const std::string& truststr,
+                                        bool verifypeer = false)
     {
         static UniquePtr<SSL_CTX> ctx(
-            makeContext(server, cert, privk, truststr));
+            makeContext(server, cert, privk, truststr, verifypeer));
+
         return ctx.get();
     }
     static SSL_CTX* makeContext(bool server, const std::string& cert,
                                 const std::string& privk,
-                                const std::string& truststr)
+                                const std::string& truststr, bool verifypeer)
     {
         auto ctx = SSL_CTX_new(server ? SSLv23_server_method()
                                       : SSLv23_client_method());
@@ -180,19 +185,35 @@ struct ssl_sock_base
         {
             throw std::runtime_error("Invallid Private key file");
         }
-        // SSL_CTX_set_verify(ctx,
-        //                    SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
-        //                    [](int preverify_ok, X509_STORE_CTX* ctx) {
-        //     // You can implement custom verification logic here
-        //     // For simplicity, we'll return preverify_ok for now
-        //     return preverify_ok;
-        // });
+
         if (!SSL_CTX_load_verify_locations(ctx, nullptr, truststr.data()))
         {
             throw std::runtime_error(
                 "Invallid certification trust store file or location");
         }
+        enablePeerVarification(ctx, verifypeer);
         return ctx;
+    }
+    static void enablePeerVarification(SSL_CTX* context, bool verifypeer)
+    {
+        if (verifypeer)
+        {
+            mydata_index = SSL_get_ex_new_index(0, (void*)"mydata index", NULL,
+                                                NULL, NULL);
+
+            int verify_depth = 6;
+            SSL_CTX_set_verify_depth(context, verify_depth + 1);
+            mycontextdata.verify_depth = verify_depth;
+            mycontextdata.always_continue = true;
+            SSL_CTX_set_ex_data(context, mydata_index, &mycontextdata);
+            SSL_CTX_set_verify(
+                context, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+                [](int preverify_ok, X509_STORE_CTX* ctx) {
+                // You can implement custom verification logic here
+                // For simplicity, we'll return preverify_ok for now
+                return verify_callback(preverify_ok, ctx);
+                });
+        }
     }
 };
 struct ssl_client_sock : ssl_sock_base<ssl_client_sock>
@@ -201,7 +222,8 @@ struct ssl_client_sock : ssl_sock_base<ssl_client_sock>
     sock_base base_;
     UniquePtr<SSL_CTX> ctx_;
     UniquePtr<SSL> ssl_;
-    ssl_client_sock(sock_base b, const char* ssltruststore = "/etc/ssl/certs") :
+    ssl_client_sock(sock_base b, bool verifypeer = false,
+                    const char* ssltruststore = "/etc/ssl/certs") :
         base_(std::move(b))
     {
         ctx_.reset(SSL_CTX_new(SSLv23_client_method()));
@@ -209,9 +231,11 @@ struct ssl_client_sock : ssl_sock_base<ssl_client_sock>
         {
             throw std::runtime_error("Error in setring trust store dir");
         }
+        enablePeerVarification(ctx_.get(), verifypeer);
         ssl_.reset(SSL_new(ctx_.get()));
         SSL_set_fd(ssl(), base_.fd());
         set_blocked(base(), false);
+
         if (auto err = startHandShake(); err != SSlErrors::None)
         {}
     }
@@ -239,6 +263,10 @@ struct ssl_client_sock : ssl_sock_base<ssl_client_sock>
     {
         return ssl_.get();
     }
+    SSL_CTX* context() const
+    {
+        return ctx_.get();
+    }
     sock_base& base()
     {
         return base_;
@@ -262,10 +290,6 @@ struct ssl_server_sock : ssl_sock_base<ssl_server_sock>
     UniquePtr<SSL> ssl_;
     ssl_server_sock(sock_base b, SSL_CTX* c) : base_(std::move(b)), ctx_(c)
     {
-        // if(!SSL_CTX_load_verify_locations(ctx.get(),"path/to/truststore.pem",nullptr))
-        // {
-        //     // Handle error loading trust store
-        // }
         ssl_.reset(SSL_new(ctx_));
         SSL_set_fd(ssl(), base_.fd());
     }
@@ -279,12 +303,26 @@ struct ssl_server_sock : ssl_sock_base<ssl_server_sock>
         {
             return SSlErrors(SSL_get_error(ssl(), r));
         }
+        auto peer = SSL_get_peer_certificate(ssl());
+        if (peer)
+        {
+            auto vr = SSL_get_verify_result(ssl());
+            if (vr == X509_V_OK)
+            {
+                return SSlErrors::None;
+            }
+            return SSlErrors(vr);
+        }
         return SSlErrors::None;
     }
 
     SSL* ssl() const
     {
         return ssl_.get();
+    }
+    SSL_CTX* context() const
+    {
+        return ctx_;
     }
     sock_base& base()
     {
